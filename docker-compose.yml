@@ -1,0 +1,112 @@
+services:
+  db-master:
+    image: bitnami/postgresql:latest
+    container_name: db-master
+    restart: always
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRESQL_POSTGRES_PASSWORD=Demo@123
+      - POSTGRESQL_USERNAME=melyen
+      - POSTGRESQL_PASSWORD=Demo@123
+      - POSTGRESQL_DATABASE=products
+      # Replication config (Master)
+      - POSTGRESQL_REPLICATION_MODE=master
+      - POSTGRESQL_REPLICATION_USER=repl_melyen
+      - POSTGRESQL_REPLICATION_PASSWORD=Demo@123
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U melyen -d products"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - appnet
+
+  db-slave:
+    image: bitnami/postgresql:latest
+    container_name: db-slave
+    restart: always
+    ports:
+      - "5433:5432"
+    depends_on:
+      db-master:
+        condition: service_healthy
+    environment:
+      - POSTGRESQL_POSTGRES_PASSWORD=Demo@123
+      - POSTGRESQL_USERNAME=melyen
+      - POSTGRESQL_PASSWORD=Demo@123
+      - POSTGRESQL_DATABASE=products
+      # Replication config (Slave)
+      - POSTGRESQL_REPLICATION_MODE=slave
+      - POSTGRESQL_REPLICATION_USER=repl_melyen
+      - POSTGRESQL_REPLICATION_PASSWORD=Demo@123
+      - POSTGRESQL_MASTER_HOST=db-master
+      - POSTGRESQL_MASTER_PORT_NUMBER=5432
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U melyen -d products"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - appnet
+
+  appNodeA:
+    build:
+      context: ./myapp
+      dockerfile: Dockerfile
+    image: appnodea
+    container_name: appNodeA
+    restart: always
+    environment:
+      - APP_NAME=Node_A
+    command: >
+      bash -c "
+        python manage.py migrate --noinput &&
+        gunicorn myapp.wsgi:application --bind 0.0.0.0:8000
+      "
+    depends_on:
+      db-master:
+        condition: service_healthy
+      db-slave:
+        condition: service_healthy
+    networks:
+      - appnet
+
+  appNodeB:
+    build:
+      context: ./myapp
+      dockerfile: Dockerfile
+    image: appnodeb
+    container_name: appNodeB
+    restart: always
+    environment:
+      - APP_NAME=Node_B
+    command: >
+      bash -c "
+        gunicorn myapp.wsgi:application --bind 0.0.0.0:8000
+      "
+    depends_on:
+      db-master:
+        condition: service_healthy
+      db-slave:
+        condition: service_healthy
+    networks:
+      - appnet
+      
+  nginx:
+    image: nginx:stable-alpine
+    container_name: nginx
+    restart: always
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - appNodeA
+      - appNodeB
+    networks:
+      - appnet
+
+networks:
+  appnet:
+    driver: bridge
